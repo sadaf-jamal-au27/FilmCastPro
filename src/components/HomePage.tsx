@@ -67,6 +67,8 @@ export const HomePage: React.FC<HomePageProps> = ({ onPageChange }) => {
               <span className="text-blue-400">Powered by AWS EKS</span>
               <span className="text-gray-400 mx-2">|</span>
               <span className="text-purple-400">GitOps Automated</span>
+              <span className="text-gray-400 mx-2">|</span>
+              <span className="text-pink-400">📧 Email Notifications Active</span>
             </div>
           </div>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
@@ -133,7 +135,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onPageChange }) => {
       {/* Stats Section */}
       <section className="py-16 bg-gray-800">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid md:grid-cols-3 gap-8 text-center">
+          <div className="grid md:grid-cols-4 gap-8 text-center">
             <div>
               <div className="text-4xl md:text-5xl font-bold text-yellow-400 mb-2">10K+</div>
               <div className="text-gray-300 text-lg">Active Professionals</div>
@@ -145,6 +147,10 @@ export const HomePage: React.FC<HomePageProps> = ({ onPageChange }) => {
             <div>
               <div className="text-4xl md:text-5xl font-bold text-yellow-400 mb-2">50+</div>
               <div className="text-gray-300 text-lg">Countries Represented</div>
+            </div>
+            <div>
+              <div className="text-4xl md:text-5xl font-bold text-pink-400 mb-2">100%</div>
+              <div className="text-gray-300 text-lg">Automated Deployments</div>
             </div>
           </div>
         </div>
