@@ -32,8 +32,8 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-900">
       {/* GitOps Deployment Banner */}
-      <div className="bg-gradient-to-r from-green-500 via-blue-500 to-purple-600 text-white py-2 px-4 text-center font-semibold shadow-lg">
-        🚀 Deployed via GitOps | ArgoCD + GitHub Actions + AWS EKS | Auto-Synced ✨
+      <div className="bg-gradient-to-r from-green-500 via-blue-500 to-purple-600 text-white py-2 px-4 text-center font-semibold shadow-lg animate-pulse">
+        🚀 Live Deployment | GitOps Pipeline: GitHub Actions → ArgoCD → EKS | Automated ✨
       </div>
       <Header currentPage={currentPage} onPageChange={setCurrentPage} />
       {renderPage()}
