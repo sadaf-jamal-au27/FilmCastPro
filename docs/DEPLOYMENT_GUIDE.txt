@@ -1,0 +1,628 @@
+================================================================================
+                    FILMCASTPRO - EKS DEPLOYMENT GUIDE
+================================================================================
+
+TABLE OF CONTENTS
+1. Prerequisites
+2. AWS Setup
+3. Docker Image Build & Push to ECR
+4. EKS Infrastructure Provisioning (Terraform)
+5. Application Deployment (Helm)
+6. Verification & Testing
+7. Scaling & Management
+8. Cleanup
+9. Troubleshooting
+
+================================================================================
+1. PREREQUISITES
+================================================================================
+
+Required Tools:
+- AWS CLI (v2.x or higher)
+- kubectl (v1.30 or higher)
+- Terraform (v1.6.0 or higher)
+- Docker Desktop or Docker Engine
+- Helm (v3.x)
+- Git
+
+AWS Requirements:
+- AWS Account with appropriate permissions
+- IAM User with programmatic access
+- IAM policies: EKS, EC2, VPC, IAM, ECR, CloudWatch
+
+Local Setup Verification:
+    aws --version
+    kubectl version --client
+    terraform --version
+    docker --version
+    helm version
+
+================================================================================
+2. AWS SETUP
+================================================================================
+
+2.1 Configure AWS CLI
+----------------------
+    aws configure
+
+    Enter the following:
+    - AWS Access Key ID: [Your Access Key]
+    - AWS Secret Access Key: [Your Secret Key]
+    - Default region: us-east-1
+    - Default output format: json
+
+2.2 Verify AWS Authentication
+------------------------------
+    aws sts get-caller-identity
+
+    Expected output should show:
+    - UserId
+    - Account ID
+    - ARN of your IAM user
+
+2.3 Create ECR Repository
+--------------------------
+    aws ecr create-repository \
+        --repository-name filmcastpro \
+        --region us-east-1
+
+    Note the repository URI from the output:
+    008099619893.dkr.ecr.us-east-1.amazonaws.com/filmcastpro
+
+================================================================================
+3. DOCKER IMAGE BUILD & PUSH TO ECR
+================================================================================
+
+3.1 Project Structure
+---------------------
+The application uses a multi-stage Dockerfile:
+- Stage 1: Build React/Vite application with Node.js
+- Stage 2: Serve static files with Nginx
+
+Dockerfile location: /Devops/FilmCastPro/Dockerfile
+
+3.2 Authenticate Docker to ECR
+-------------------------------
+    cd /Users/sadafperveen05/Devops/FilmCastPro
+
+    aws ecr get-login-password --region us-east-1 | \
+    docker login --username AWS --password-stdin \
+    008099619893.dkr.ecr.us-east-1.amazonaws.com
+
+    Expected: "Login Succeeded"
+
+3.3 Build Docker Image
+-----------------------
+Build for linux/amd64 platform (EKS nodes architecture):
+
+    docker buildx build \
+        --platform linux/amd64 \
+        -t 008099619893.dkr.ecr.us-east-1.amazonaws.com/filmcastpro:latest \
+        --push .
+
+    This command:
+    - Builds the image for amd64 architecture
+    - Tags it with ECR repository URI
+    - Pushes directly to ECR
+
+    Build time: ~60 seconds
+
+3.4 Verify Image in ECR
+------------------------
+    aws ecr describe-images \
+        --repository-name filmcastpro \
+        --region us-east-1
+
+================================================================================
+4. EKS INFRASTRUCTURE PROVISIONING (TERRAFORM)
+================================================================================
+
+4.1 Terraform Configuration Overview
+-------------------------------------
+Location: /Users/sadafperveen05/Devops/FilmCastPro/infra/eks/
+
+Files:
+- versions.tf   : Provider versions and configurations
+- variables.tf  : Input variables (region, cluster name)
+- main.tf       : VPC, EKS cluster, and node group definitions
+
+Infrastructure Components:
+- VPC with public and private subnets across 2 AZs
+- NAT Gateway for private subnet internet access
+- EKS Cluster (v1.30)
+- Managed Node Group (2 x t3.small instances)
+- Security groups and IAM roles
+
+4.2 Initialize Terraform
+-------------------------
+    cd /Users/sadafperveen05/Devops/FilmCastPro/infra/eks
+    terraform init
+
+    This downloads required providers:
+    - AWS provider
+    - VPC module
+    - EKS module
+
+4.3 Review Terraform Plan
+--------------------------
+    terraform plan
+
+    Review the resources to be created:
+    - 54 resources total
+    - VPC components (subnets, route tables, IGW, NAT)
+    - EKS cluster
+    - Node group
+    - IAM roles and policies
+    - Security groups
+
+4.4 Apply Terraform Configuration
+----------------------------------
+    terraform apply -auto-approve
+
+    Provisioning time: ~12-15 minutes
+
+    Key stages:
+    1. VPC creation (~2 min)
+    2. NAT Gateway creation (~2 min)
+    3. EKS cluster creation (~10 min)
+    4. Node group creation (~2 min)
+
+4.5 Note Important Outputs
+---------------------------
+After completion, Terraform outputs:
+    - cluster_name: filmcastpro
+    - region: us-east-1
+    - configure_kubectl: aws eks update-kubeconfig command
+
+================================================================================
+5. APPLICATION DEPLOYMENT (HELM)
+================================================================================
+
+5.1 Configure kubectl for EKS
+------------------------------
+    aws eks update-kubeconfig \
+        --region us-east-1 \
+        --name filmcastpro
+
+    Verify connection:
+    kubectl get nodes
+
+    Expected output:
+    NAME                         STATUS   ROLES    AGE   VERSION
+    ip-10-0-1-xxx.ec2.internal   Ready    <none>   XXm   v1.30.14-eks-xxx
+    ip-10-0-2-xxx.ec2.internal   Ready    <none>   XXm   v1.30.14-eks-xxx
+
+5.2 Helm Chart Configuration
+-----------------------------
+Location: /Users/sadafperveen05/Devops/FilmCastPro/charts/filmcastpro/
+
+Key files:
+- Chart.yaml       : Chart metadata
+- values.yaml      : Default configuration values
+- templates/       : Kubernetes manifest templates
+
+Important values.yaml settings:
+    image:
+      repository: 008099619893.dkr.ecr.us-east-1.amazonaws.com/filmcastpro
+      tag: latest
+      pullPolicy: IfNotPresent
+    
+    service:
+      type: LoadBalancer
+      port: 80
+    
+    replicaCount: 1
+
+5.3 Create Namespace
+--------------------
+    kubectl create namespace filmcastpro
+
+5.4 Deploy Application with Helm
+---------------------------------
+    cd /Users/sadafperveen05/Devops/FilmCastPro
+
+    helm upgrade --install filmcastpro ./charts/filmcastpro \
+        -n filmcastpro \
+        --wait \
+        --timeout 5m
+
+    This command:
+    - Installs or upgrades the release named "filmcastpro"
+    - Uses local Helm chart in ./charts/filmcastpro
+    - Deploys to "filmcastpro" namespace
+    - Waits for resources to be ready (up to 5 minutes)
+
+5.5 Verify Deployment
+----------------------
+Check pods:
+    kubectl get pods -n filmcastpro
+
+    Expected:
+    NAME                           READY   STATUS    RESTARTS   AGE
+    filmcastpro-xxxxxxxxxx-xxxxx   1/1     Running   0          XXs
+
+Check service:
+    kubectl get svc -n filmcastpro
+
+    Expected:
+    NAME          TYPE           CLUSTER-IP      EXTERNAL-IP
+    filmcastpro   LoadBalancer   172.20.xx.xx    aXXXXXX.elb.amazonaws.com
+
+Note: LoadBalancer provisioning takes 2-3 minutes
+
+================================================================================
+6. VERIFICATION & TESTING
+================================================================================
+
+6.1 Get LoadBalancer URL
+-------------------------
+    kubectl get svc filmcastpro -n filmcastpro -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+
+    Example output:
+    a594e11411ab740019c57084a40b5fa5-1983588965.us-east-1.elb.amazonaws.com
+
+6.2 Test Application
+---------------------
+Wait for LoadBalancer DNS propagation (~2-3 minutes), then:
+
+    curl -I http://[LOADBALANCER-URL]
+
+    Expected response:
+    HTTP/1.1 200 OK
+    Server: nginx/1.28.0
+    Content-Type: text/html
+
+Browser test:
+    Open: http://[LOADBALANCER-URL]
+
+6.3 View Application Logs
+--------------------------
+    kubectl logs -n filmcastpro -l app.kubernetes.io/name=filmcastpro
+
+    For streaming logs:
+    kubectl logs -n filmcastpro -l app.kubernetes.io/name=filmcastpro -f
+
+6.4 Describe Pod for Details
+-----------------------------
+    kubectl describe pod -n filmcastpro -l app.kubernetes.io/name=filmcastpro
+
+================================================================================
+7. SCALING & MANAGEMENT
+================================================================================
+
+7.1 Scale Application Replicas
+-------------------------------
+Increase replicas for high availability:
+
+    kubectl scale deployment filmcastpro -n filmcastpro --replicas=3
+
+    Verify:
+    kubectl get pods -n filmcastpro
+
+7.2 Update Application Image
+-----------------------------
+After pushing new image to ECR:
+
+    helm upgrade filmcastpro ./charts/filmcastpro \
+        -n filmcastpro \
+        --set image.tag=v1.1 \
+        --wait
+
+7.3 Rollback Deployment
+------------------------
+View history:
+    helm history filmcastpro -n filmcastpro
+
+Rollback to previous version:
+    helm rollback filmcastpro -n filmcastpro
+
+7.4 Update Node Group Size
+---------------------------
+Edit: /Users/sadafperveen05/Devops/FilmCastPro/infra/eks/main.tf
+
+Change node group configuration:
+    eks_managed_node_groups = {
+      main = {
+        instance_types = ["t3.small"]
+        min_size       = 2
+        max_size       = 4
+        desired_size   = 3
+      }
+    }
+
+Apply changes:
+    cd /Users/sadafperveen05/Devops/FilmCastPro/infra/eks
+    terraform apply -auto-approve
+
+7.5 Resource Monitoring
+------------------------
+Check cluster resources:
+    kubectl top nodes
+    kubectl top pods -n filmcastpro
+
+View cluster info:
+    kubectl cluster-info
+
+================================================================================
+8. CLEANUP
+================================================================================
+
+8.1 Delete Helm Release
+------------------------
+    helm uninstall filmcastpro -n filmcastpro
+    kubectl delete namespace filmcastpro
+
+8.2 Destroy EKS Infrastructure
+-------------------------------
+    cd /Users/sadafperveen05/Devops/FilmCastPro/infra/eks
+    terraform destroy -auto-approve
+
+    Destruction time: ~10-15 minutes
+
+    This removes:
+    - EKS node group
+    - EKS cluster
+    - NAT Gateway
+    - VPC and all network components
+    - IAM roles and policies
+    - Security groups
+
+8.3 Delete ECR Repository
+--------------------------
+    aws ecr delete-repository \
+        --repository-name filmcastpro \
+        --region us-east-1 \
+        --force
+
+8.4 Cleanup Local Docker Images
+--------------------------------
+    docker rmi 008099619893.dkr.ecr.us-east-1.amazonaws.com/filmcastpro:latest
+
+================================================================================
+9. TROUBLESHOOTING
+================================================================================
+
+9.1 ImagePullBackOff Error
+---------------------------
+Problem: Pod cannot pull image from ECR
+
+Check 1 - Verify image exists:
+    aws ecr describe-images --repository-name filmcastpro --region us-east-1
+
+Check 2 - Verify image platform:
+    docker buildx build --platform linux/amd64 -t [ECR-URI]:latest --push .
+
+Check 3 - Delete pod to retry:
+    kubectl delete pod -n filmcastpro --all
+
+9.2 Kubectl Authentication Error
+----------------------------------
+Problem: "error: You must be logged in to the server"
+
+Solution:
+    aws eks update-kubeconfig --region us-east-1 --name filmcastpro
+
+Verify IAM permissions for EKS access
+
+9.3 LoadBalancer Stuck in Pending
+----------------------------------
+Problem: Service EXTERNAL-IP shows <pending>
+
+Check 1 - Verify subnet tags:
+    Public subnets must have tag:
+    kubernetes.io/role/elb = 1
+
+Check 2 - Check service events:
+    kubectl describe svc filmcastpro -n filmcastpro
+
+Check 3 - Verify node readiness:
+    kubectl get nodes
+
+9.4 Terraform Apply Failures
+-----------------------------
+Problem: Terraform errors during apply
+
+Common issues:
+- IAM permission issues: Ensure user has full EKS/EC2/VPC permissions
+- Resource limits: Check AWS service quotas
+- State lock: Remove lock if previous apply was interrupted
+
+Resolution:
+    terraform refresh
+    terraform plan
+    terraform apply
+
+9.5 Pod Crashes or CrashLoopBackOff
+------------------------------------
+Check pod logs:
+    kubectl logs -n filmcastpro [POD-NAME]
+
+Check pod events:
+    kubectl describe pod -n filmcastpro [POD-NAME]
+
+Common causes:
+- Application errors
+- Missing environment variables
+- Insufficient resources
+
+9.6 Helm Installation Timeout
+------------------------------
+Problem: "Error: context deadline exceeded"
+
+Increase timeout:
+    helm upgrade --install filmcastpro ./charts/filmcastpro \
+        -n filmcastpro \
+        --wait \
+        --timeout 10m
+
+Check pod status during installation:
+    kubectl get pods -n filmcastpro -w
+
+9.7 Node Not Ready
+------------------
+Check node status:
+    kubectl get nodes
+    kubectl describe node [NODE-NAME]
+
+Check node logs:
+    aws eks describe-nodegroup \
+        --cluster-name filmcastpro \
+        --nodegroup-name main-xxx \
+        --region us-east-1
+
+9.8 Out of Pod Capacity
+------------------------
+Problem: "0/X nodes are available: X Too many pods"
+
+Solution 1 - Scale node group:
+    Update main.tf desired_size and apply terraform
+
+Solution 2 - Use larger instance type:
+    Change instance_types from t3.small to t3.medium
+
+Solution 3 - Scale down other deployments:
+    kubectl scale deployment coredns -n kube-system --replicas=1
+
+================================================================================
+ARCHITECTURE DIAGRAM
+================================================================================
+
+Internet
+    |
+    v
+AWS LoadBalancer (ELB)
+    |
+    v
+EKS Cluster (filmcastpro)
+    |
+    +-- VPC (10.0.0.0/16)
+    |   |
+    |   +-- Public Subnets (10.0.101.0/24, 10.0.102.0/24)
+    |   |   +-- NAT Gateway
+    |   |   +-- Internet Gateway
+    |   |
+    |   +-- Private Subnets (10.0.1.0/24, 10.0.2.0/24)
+    |       +-- EKS Worker Nodes (2 x t3.small)
+    |           +-- FilmCastPro Pods (Nginx + React App)
+    |
+    +-- ECR (Container Registry)
+        +-- filmcastpro:latest image
+
+================================================================================
+COST ESTIMATION (us-east-1)
+================================================================================
+
+Monthly costs (approximate):
+- EKS Cluster: $72.00/month
+- EC2 t3.small x 2: ~$30.00/month
+- NAT Gateway: ~$32.00/month
+- LoadBalancer: ~$16.00/month
+- Data Transfer: Variable
+- ECR Storage: ~$0.10/GB/month
+
+Total: ~$150-200/month
+
+To reduce costs:
+- Use t3.micro instead of t3.small (Free tier eligible)
+- Use single NAT Gateway (current setup)
+- Delete resources when not in use
+
+================================================================================
+SECURITY BEST PRACTICES
+================================================================================
+
+1. Never commit AWS credentials to Git
+2. Use IAM roles instead of access keys when possible
+3. Enable EKS audit logging
+4. Regularly update EKS cluster version
+5. Scan Docker images for vulnerabilities
+6. Use private subnets for worker nodes (current setup)
+7. Restrict security group ingress rules
+8. Enable VPC Flow Logs for network monitoring
+9. Use Secrets Manager or Parameter Store for sensitive data
+10. Implement pod security policies
+
+================================================================================
+MAINTENANCE SCHEDULE
+================================================================================
+
+Daily:
+- Monitor application logs
+- Check pod and node health
+
+Weekly:
+- Review CloudWatch metrics
+- Check for security updates
+- Review cost reports
+
+Monthly:
+- Update Kubernetes version (if available)
+- Review and rotate IAM credentials
+- Backup Terraform state
+- Update Docker base images
+
+Quarterly:
+- Review and optimize resource allocation
+- Audit IAM permissions
+- Update Terraform modules to latest versions
+
+================================================================================
+USEFUL COMMANDS REFERENCE
+================================================================================
+
+AWS:
+    aws eks list-clusters --region us-east-1
+    aws eks describe-cluster --name filmcastpro --region us-east-1
+    aws ecr list-images --repository-name filmcastpro --region us-east-1
+
+Kubernetes:
+    kubectl get all -n filmcastpro
+    kubectl get events -n filmcastpro --sort-by='.lastTimestamp'
+    kubectl exec -it [POD-NAME] -n filmcastpro -- /bin/sh
+    kubectl port-forward svc/filmcastpro -n filmcastpro 8080:80
+
+Helm:
+    helm list -n filmcastpro
+    helm status filmcastpro -n filmcastpro
+    helm get values filmcastpro -n filmcastpro
+    helm template filmcastpro ./charts/filmcastpro --debug
+
+Terraform:
+    terraform state list
+    terraform state show module.eks.aws_eks_cluster.this[0]
+    terraform output
+    terraform fmt -recursive
+
+Docker:
+    docker images | grep filmcastpro
+    docker history [IMAGE-ID]
+    docker inspect [IMAGE-ID]
+
+================================================================================
+CONTACT & SUPPORT
+================================================================================
+
+Project Repository: [Git Repository URL]
+Documentation: /Devops/FilmCastPro/DEPLOYMENT_GUIDE.txt
+AWS Region: us-east-1
+EKS Version: 1.30
+Kubernetes Version: 1.30.14
+
+For issues and questions:
+1. Check this troubleshooting guide
+2. Review kubectl/helm/terraform logs
+3. Check AWS CloudWatch logs
+4. Consult AWS EKS documentation
+
+================================================================================
+DOCUMENT VERSION
+================================================================================
+
+Version: 1.0
+Last Updated: October 6, 2025
+Author: DevOps Team
+Cluster: filmcastpro
+Environment: Production
+
+================================================================================
+

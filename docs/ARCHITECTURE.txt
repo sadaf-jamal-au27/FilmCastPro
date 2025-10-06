@@ -1,0 +1,604 @@
+================================================================================
+                FILMCASTPRO - ARCHITECTURE DOCUMENTATION
+================================================================================
+
+================================================================================
+1. OVERVIEW
+================================================================================
+
+Application: FilmCastPro
+Type: React/Vite Single Page Application
+Infrastructure: Amazon EKS (Elastic Kubernetes Service)
+Container Runtime: Docker
+Deployment Tool: Helm
+Infrastructure as Code: Terraform
+
+================================================================================
+2. NETWORK ARCHITECTURE
+================================================================================
+
+INTERNET
+    |
+    | (HTTP/HTTPS)
+    v
+[AWS Classic Load Balancer]
+    |
+    | (Port 80)
+    v
+[EKS Cluster - filmcastpro]
+    |
+    v
+[VPC: 10.0.0.0/16]
+    |
+    +---[Availability Zone: us-east-1a]
+    |   |
+    |   +--[Public Subnet: 10.0.101.0/24]
+    |   |   +-- Internet Gateway
+    |   |   +-- NAT Gateway
+    |   |   +-- Elastic IP
+    |   |
+    |   +--[Private Subnet: 10.0.1.0/24]
+    |       +-- EKS Worker Node 1 (t3.small)
+    |           +-- FilmCastPro Pod
+    |           +-- CoreDNS Pod
+    |
+    +---[Availability Zone: us-east-1b]
+        |
+        +--[Public Subnet: 10.0.102.0/24]
+        |
+        +--[Private Subnet: 10.0.2.0/24]
+            +-- EKS Worker Node 2 (t3.small)
+                +-- FilmCastPro Pod (when scaled)
+                +-- CoreDNS Pod
+
+================================================================================
+3. COMPONENT DETAILS
+================================================================================
+
+3.1 VPC Configuration
+----------------------
+CIDR Block: 10.0.0.0/16
+DNS Hostnames: Enabled
+DNS Support: Enabled
+
+Public Subnets:
+- 10.0.101.0/24 (us-east-1a)
+- 10.0.102.0/24 (us-east-1b)
+Tags: kubernetes.io/role/elb=1
+
+Private Subnets:
+- 10.0.1.0/24 (us-east-1a)
+- 10.0.2.0/24 (us-east-1b)
+
+3.2 Internet Connectivity
+--------------------------
+Internet Gateway: Attached to VPC
+  - Provides internet access to public subnets
+  - Routes: 0.0.0.0/0 -> IGW
+
+NAT Gateway: In public subnet (us-east-1a)
+  - Provides outbound internet for private subnets
+  - Uses Elastic IP
+  - Routes: 0.0.0.0/0 -> NAT (from private subnets)
+
+3.3 EKS Cluster
+---------------
+Name: filmcastpro
+Version: 1.30
+Endpoint: Public
+Authentication: IAM
+
+Control Plane:
+- Managed by AWS
+- Multi-AZ for high availability
+- API Server endpoint: Public access enabled
+
+Encryption:
+- Secrets encrypted with AWS KMS
+- Key Alias: alias/eks/filmcastpro
+- Key Rotation: Enabled
+
+3.4 EKS Node Group
+------------------
+Name: main
+Type: Managed Node Group
+Instance Type: t3.small
+Capacity:
+  - Min: 2
+  - Desired: 2
+  - Max: 3
+
+AMI: Amazon Linux 2 EKS Optimized
+Disk: 20GB gp3 (default)
+
+Launch Template:
+- Monitoring: Enabled
+- Metadata: IMDSv2 required
+- HTTP Tokens: Required
+
+Node Placement: Private Subnets
+
+3.5 Security Groups
+-------------------
+Cluster Security Group:
+- Managed by EKS
+- Allows communication between control plane and nodes
+
+Node Security Group:
+Rules:
+- Allow all from self (inter-node communication)
+- Allow 443 from cluster (kubelet API)
+- Allow 4443, 6443, 8443, 9443 from cluster (webhooks)
+- Allow 53 TCP/UDP from self (CoreDNS)
+- Allow all outbound
+
+3.6 IAM Roles & Policies
+-------------------------
+EKS Cluster Role:
+- AmazonEKSClusterPolicy
+- AmazonEKSVPCResourceController
+- Custom cluster encryption policy
+
+Node Group Role:
+- AmazonEKSWorkerNodePolicy
+- AmazonEKS_CNI_Policy
+- AmazonEC2ContainerRegistryReadOnly
+
+OIDC Provider:
+- Enables IAM roles for service accounts (IRSA)
+- URL: oidc.eks.us-east-1.amazonaws.com/id/[CLUSTER-ID]
+
+User Access:
+- Cluster creator automatically gets admin access
+- Additional users via EKS Access Entry
+
+================================================================================
+4. APPLICATION ARCHITECTURE
+================================================================================
+
+4.1 Container Image
+-------------------
+Registry: Amazon ECR
+Repository: 008099619893.dkr.ecr.us-east-1.amazonaws.com/filmcastpro
+Tag: latest
+Platform: linux/amd64
+
+Multi-Stage Build:
+Stage 1 (Build):
+  - Base: node:20
+  - Build Vite/React app
+  - Output: /app/dist
+
+Stage 2 (Runtime):
+  - Base: nginx:stable-alpine
+  - Copy: /app/dist -> /usr/share/nginx/html
+  - Expose: Port 80
+
+4.2 Kubernetes Resources
+-------------------------
+Namespace: filmcastpro
+
+Deployment:
+  Name: filmcastpro
+  Replicas: 1 (scalable)
+  Strategy: RollingUpdate
+  
+  Pod Spec:
+    - Container: filmcastpro
+    - Image: [ECR-URI]:latest
+    - Port: 80 (named: http)
+    - Pull Policy: IfNotPresent
+    
+  Probes:
+    - Liveness: HTTP GET / on port http
+    - Readiness: HTTP GET / on port http
+
+Service:
+  Name: filmcastpro
+  Type: LoadBalancer
+  Port: 80
+  Target Port: http (80)
+  Selector: app.kubernetes.io/name=filmcastpro
+
+ServiceAccount:
+  Name: filmcastpro
+  Automount: true
+
+4.3 Helm Chart Structure
+-------------------------
+Chart Name: filmcastpro
+Location: /charts/filmcastpro/
+
+Files:
+/charts/filmcastpro/
+  Chart.yaml              # Chart metadata
+  values.yaml             # Default values
+  templates/
+    deployment.yaml       # Deployment manifest
+    service.yaml          # Service manifest
+    serviceaccount.yaml   # ServiceAccount manifest
+    ingress.yaml          # Ingress (disabled)
+    hpa.yaml              # HPA (disabled)
+    _helpers.tpl          # Template helpers
+  .helmignore
+
+Key Values:
+  replicaCount: 1
+  image.repository: [ECR-URI]
+  image.tag: latest
+  service.type: LoadBalancer
+  service.port: 80
+
+================================================================================
+5. DATA FLOW
+================================================================================
+
+User Request Flow:
+1. User browser -> DNS lookup for ELB hostname
+2. Request hits AWS Classic Load Balancer
+3. ELB forwards to NodePort on worker nodes
+4. kube-proxy redirects to filmcastpro pod
+5. Nginx serves static React/Vite app
+6. Response: 200 OK with HTML/JS/CSS
+
+Pod-to-Pod Communication:
+1. Pods communicate via cluster IP
+2. CoreDNS resolves service names
+3. CNI plugin (AWS VPC CNI) assigns pod IPs from VPC
+
+Outbound Traffic:
+1. Pod -> Node
+2. Node -> NAT Gateway (via private route table)
+3. NAT Gateway -> Internet Gateway
+4. Internet
+
+Container Image Pull:
+1. kubelet requests image
+2. Authenticates to ECR using node IAM role
+3. Pulls image from ECR
+4. Stores in local containerd cache
+
+================================================================================
+6. TERRAFORM MODULE STRUCTURE
+================================================================================
+
+/infra/eks/
+  versions.tf
+    - Terraform version constraint: >= 1.6.0
+    - AWS provider: ~> 5.0
+  
+  variables.tf
+    - region: us-east-1
+    - cluster_name: filmcastpro
+  
+  main.tf
+    - Data: AWS availability zones
+    
+    - Module: VPC (terraform-aws-modules/vpc/aws)
+      - CIDR: 10.0.0.0/16
+      - Subnets: 2 private, 2 public
+      - NAT: Single gateway
+    
+    - Module: EKS (terraform-aws-modules/eks/aws)
+      - Cluster version: 1.30
+      - Endpoint: Public
+      - Node groups: 1 managed group
+      - Access: Cluster creator admin
+    
+    - Outputs:
+      - cluster_name
+      - region
+      - configure_kubectl command
+
+State: Local (terraform.tfstate)
+Backend: None (can be configured for S3)
+
+================================================================================
+7. MONITORING & LOGGING
+================================================================================
+
+CloudWatch Log Groups:
+- /aws/eks/filmcastpro/cluster (control plane logs)
+
+Enabled Log Types:
+- API server
+- Audit
+- Authenticator
+- Controller manager
+- Scheduler
+
+Metrics Available:
+- Node CPU/Memory utilization
+- Pod CPU/Memory usage
+- Network I/O
+- Disk I/O
+
+Kubernetes Native:
+  kubectl top nodes
+  kubectl top pods -n filmcastpro
+  kubectl logs -n filmcastpro [pod-name]
+
+================================================================================
+8. HIGH AVAILABILITY SETUP
+================================================================================
+
+Current HA Components:
+- EKS Control Plane: Multi-AZ (AWS managed)
+- Worker Nodes: 2 nodes across 2 AZs
+- NAT Gateway: Single (for cost optimization)
+
+Recommendations for Production HA:
+1. Increase node count to 3+
+2. Add NAT Gateway in second AZ
+3. Enable pod autoscaling (HPA)
+4. Enable cluster autoscaling
+5. Multi-replica deployment (3+ replicas)
+6. Pod Anti-affinity rules
+7. PodDisruptionBudget
+
+Example HPA:
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+================================================================================
+9. DISASTER RECOVERY
+================================================================================
+
+Backup Strategy:
+- Terraform State: Should be in S3 with versioning
+- EKS Configuration: In Git repository
+- Container Images: Stored in ECR with lifecycle policies
+- Application Code: In Git repository
+
+Recovery Procedures:
+1. Code restore: Pull from Git
+2. Infrastructure restore: terraform apply
+3. Application restore: helm install
+4. Data restore: (if applicable - databases, volumes)
+
+RTO (Recovery Time Objective): ~15-20 minutes
+RPO (Recovery Point Objective): Last Git commit
+
+================================================================================
+10. SCALING STRATEGIES
+================================================================================
+
+Horizontal Pod Autoscaling (HPA):
+  kubectl autoscale deployment filmcastpro \
+    -n filmcastpro \
+    --cpu-percent=70 \
+    --min=3 \
+    --max=10
+
+Cluster Autoscaling:
+  - Install Cluster Autoscaler
+  - Or use Karpenter for better optimization
+  - Configure node group min/max in Terraform
+
+Manual Scaling:
+  Pods:     kubectl scale deployment filmcastpro -n filmcastpro --replicas=5
+  Nodes:    Edit Terraform main.tf desired_size -> terraform apply
+
+Load Testing:
+  Use tools like:
+  - Apache Bench (ab)
+  - Hey
+  - K6
+  - Locust
+
+================================================================================
+11. SECURITY ARCHITECTURE
+================================================================================
+
+Network Security:
+- Worker nodes in private subnets (no public IP)
+- Security groups restrict traffic
+- Network ACLs at subnet level
+
+Authentication:
+- EKS: AWS IAM
+- Pods: Kubernetes ServiceAccount
+- ECR: IAM role attached to nodes
+
+Encryption:
+- At Rest: EKS secrets encrypted with KMS
+- In Transit: TLS for API server communication
+- Container Images: Encrypted in ECR
+
+Pod Security:
+- Security Context (if configured)
+- Read-only root filesystem (optional)
+- Non-root user (optional)
+- Capabilities drop (optional)
+
+RBAC:
+- Namespace isolation
+- ServiceAccount per application
+- Minimal IAM permissions
+
+Secrets Management:
+- Kubernetes Secrets
+- AWS Secrets Manager (recommended)
+- AWS Systems Manager Parameter Store
+
+================================================================================
+12. COST OPTIMIZATION
+================================================================================
+
+Current Monthly Costs (~$150-200):
+- EKS Control Plane: $72
+- EC2 (2 x t3.small): ~$30
+- NAT Gateway: ~$32
+- LoadBalancer: ~$16
+- Data transfer: Variable
+- ECR: ~$0.10/GB
+
+Optimization Strategies:
+1. Use Spot Instances for non-prod
+2. Right-size instances (t3.micro for low traffic)
+3. Delete unused LoadBalancers
+4. Use single NAT Gateway
+5. Enable ECR lifecycle policies
+6. Schedule node group scale-down in off-hours
+7. Use Fargate for specific workloads
+8. Monitor with AWS Cost Explorer
+
+Free Tier Eligible:
+- t3.micro instances (750 hrs/month first 12 months)
+- 5GB ECR storage
+
+================================================================================
+13. CI/CD INTEGRATION
+================================================================================
+
+Recommended Pipeline:
+
+Build Stage:
+1. Checkout code from Git
+2. Run tests
+3. Build Docker image
+4. Scan image for vulnerabilities
+5. Push to ECR with semantic versioning
+
+Deploy Stage:
+1. Update kubeconfig
+2. Update Helm values with new image tag
+3. helm upgrade --install
+4. Run smoke tests
+5. Monitor deployment
+
+Tools:
+- GitHub Actions
+- GitLab CI
+- Jenkins
+- ArgoCD (GitOps)
+- Flux (GitOps)
+
+Example GitHub Actions:
+  - .github/workflows/deploy.yml
+  - Triggers: Push to main
+  - Secrets: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+
+================================================================================
+14. TROUBLESHOOTING FLOWCHART
+================================================================================
+
+Application Not Accessible
+  |
+  +--[Check LoadBalancer]
+  |   kubectl get svc -n filmcastpro
+  |   |
+  |   +--[Pending?]
+  |   |   - Check subnet tags
+  |   |   - Check AWS quotas
+  |   |
+  |   +--[Has External-IP?]
+  |       - Wait 2-3 min for DNS
+  |       - Test with curl
+  |
+  +--[Check Pods]
+  |   kubectl get pods -n filmcastpro
+  |   |
+  |   +--[CrashLoopBackOff?]
+  |   |   - kubectl logs
+  |   |   - kubectl describe pod
+  |   |
+  |   +--[ImagePullBackOff?]
+  |   |   - Check ECR image exists
+  |   |   - Check IAM permissions
+  |   |   - Verify image platform (amd64)
+  |   |
+  |   +--[Pending?]
+  |       - Check node resources
+  |       - kubectl describe pod
+  |       - Scale nodes if needed
+  |
+  +--[Check Nodes]
+      kubectl get nodes
+      |
+      +--[NotReady?]
+      |   - Check security groups
+      |   - Check IAM roles
+      |   - aws eks describe-nodegroup
+      |
+      +--[No nodes?]
+          - Check Terraform state
+          - terraform apply
+
+================================================================================
+15. PERFORMANCE TUNING
+================================================================================
+
+Application Level:
+- Enable Nginx gzip compression
+- Set proper cache headers
+- Minimize bundle size
+- Use CDN for static assets
+
+Kubernetes Level:
+- Set resource requests/limits
+- Use HPA for auto-scaling
+- Implement PodDisruptionBudget
+- Use topology spread constraints
+
+Node Level:
+- Right-size instance types
+- Use latest EKS-optimized AMI
+- Enable enhanced networking
+- Consider Graviton instances (ARM)
+
+Network Level:
+- Use VPC CNI prefix delegation
+- Enable VPC CNI network policy
+- Consider using private endpoints
+
+Example Resource Limits:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+================================================================================
+16. COMPLIANCE & GOVERNANCE
+================================================================================
+
+Logging & Audit:
+- Enable EKS audit logs
+- CloudTrail for API calls
+- VPC Flow Logs
+- Container Insights
+
+Tagging Strategy:
+  Environment: production
+  Project: filmcastpro
+  ManagedBy: terraform
+  Team: devops
+  CostCenter: engineering
+
+Policies:
+- Pod Security Standards (PSS)
+- Network Policies
+- Resource Quotas per namespace
+- LimitRange for pod resources
+
+Compliance Frameworks:
+- CIS Kubernetes Benchmark
+- AWS Well-Architected Framework
+- PCI DSS (if applicable)
+- SOC 2 (if applicable)
+
+================================================================================
+DOCUMENT VERSION
+================================================================================
+
+Version: 1.0
+Last Updated: October 6, 2025
+Maintainer: DevOps Team
+Review Cycle: Monthly
+
+================================================================================
+

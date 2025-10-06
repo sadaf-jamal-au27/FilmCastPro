@@ -1,0 +1,127 @@
+================================================================================
+                FILMCASTPRO - QUICK START GUIDE
+================================================================================
+
+This is a condensed version for experienced DevOps engineers.
+For detailed instructions, see DEPLOYMENT_GUIDE.txt
+
+================================================================================
+PREREQUISITES
+================================================================================
+
+- AWS CLI configured with credentials
+- kubectl, terraform, docker, helm installed
+- AWS Account ID: 008099619893
+- Region: us-east-1
+
+================================================================================
+STEP 1: BUILD & PUSH IMAGE TO ECR
+================================================================================
+
+cd /Users/sadafperveen05/Devops/FilmCastPro
+
+# Login to ECR
+aws ecr get-login-password --region us-east-1 | \
+docker login --username AWS --password-stdin \
+008099619893.dkr.ecr.us-east-1.amazonaws.com
+
+# Build and push
+docker buildx build --platform linux/amd64 \
+-t 008099619893.dkr.ecr.us-east-1.amazonaws.com/filmcastpro:latest \
+--push .
+
+================================================================================
+STEP 2: PROVISION EKS WITH TERRAFORM
+================================================================================
+
+cd /Users/sadafperveen05/Devops/FilmCastPro/infra/eks
+
+# Initialize and apply
+terraform init
+terraform apply -auto-approve
+
+# Wait ~12-15 minutes
+
+================================================================================
+STEP 3: CONFIGURE KUBECTL
+================================================================================
+
+aws eks update-kubeconfig --region us-east-1 --name filmcastpro
+
+# Verify
+kubectl get nodes
+
+================================================================================
+STEP 4: DEPLOY APPLICATION WITH HELM
+================================================================================
+
+cd /Users/sadafperveen05/Devops/FilmCastPro
+
+# Create namespace
+kubectl create namespace filmcastpro
+
+# Deploy
+helm upgrade --install filmcastpro ./charts/filmcastpro \
+-n filmcastpro --wait --timeout 5m
+
+================================================================================
+STEP 5: GET APPLICATION URL
+================================================================================
+
+# Get LoadBalancer URL
+kubectl get svc filmcastpro -n filmcastpro
+
+# Test (wait 2-3 min for DNS propagation)
+curl -I http://[LOADBALANCER-URL]
+
+================================================================================
+CLEANUP
+================================================================================
+
+# Delete application
+helm uninstall filmcastpro -n filmcastpro
+
+# Destroy infrastructure
+cd /Users/sadafperveen05/Devops/FilmCastPro/infra/eks
+terraform destroy -auto-approve
+
+================================================================================
+KEY CONFIGURATIONS
+================================================================================
+
+ECR Repository:
+008099619893.dkr.ecr.us-east-1.amazonaws.com/filmcastpro
+
+EKS Cluster:
+- Name: filmcastpro
+- Version: 1.30
+- Nodes: 2 x t3.small
+- Region: us-east-1
+
+Helm Chart:
+- Location: ./charts/filmcastpro
+- Namespace: filmcastpro
+- Service Type: LoadBalancer
+
+Terraform:
+- Location: ./infra/eks
+- VPC CIDR: 10.0.0.0/16
+- Private Subnets: 10.0.1.0/24, 10.0.2.0/24
+- Public Subnets: 10.0.101.0/24, 10.0.102.0/24
+
+================================================================================
+COMMON ISSUES
+================================================================================
+
+ImagePullBackOff:
+kubectl delete pod -n filmcastpro --all
+
+Auth error:
+aws eks update-kubeconfig --region us-east-1 --name filmcastpro
+
+Scale nodes:
+Edit infra/eks/main.tf > desired_size
+terraform apply -auto-approve
+
+================================================================================
+
