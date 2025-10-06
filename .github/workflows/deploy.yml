@@ -64,20 +64,82 @@ jobs:
           git commit -m "chore: update image tag to $IMAGE_TAG [skip ci]" || exit 0
           git push
 
-  # Optional: Notify on deployment
+  # Email notification on deployment
   notify:
-    name: Notify Deployment
+    name: Send Email Notification
     needs: build-and-push
     runs-on: ubuntu-latest
     if: always()
     
     steps:
-      - name: Deployment Status
-        run: |
-          if [ "${{ needs.build-and-push.result }}" == "success" ]; then
-            echo "✅ Deployment successful! ArgoCD will sync automatically."
-          else
-            echo "❌ Deployment failed!"
-            exit 1
-          fi
+      - name: Send success email
+        if: needs.build-and-push.result == 'success'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "✅ FilmCastPro Deployment Success"
+          to: ${{ secrets.EMAIL_USERNAME }}
+          from: GitHub Actions <noreply@github.com>
+          body: |
+            🎉 Deployment completed successfully!
+            
+            📦 Repository: ${{ github.repository }}
+            🔖 Commit: ${{ github.sha }}
+            👤 Author: ${{ github.actor }}
+            💬 Message: ${{ github.event.head_commit.message }}
+            
+            🐋 Docker Image: ${{ github.sha }}
+            📍 Pushed to: ECR (008099619893.dkr.ecr.us-east-1.amazonaws.com/filmcastpro)
+            
+            🔄 Next Steps (Automatic):
+            - ArgoCD will detect the change
+            - Kubernetes will pull the new image
+            - Application will be updated in ~2 minutes
+            
+            🌐 View Application:
+            http://a594e11411ab740019c57084a40b5fa5-1983588965.us-east-1.elb.amazonaws.com
+            
+            📊 View Workflow:
+            https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            ⏱️ Deployment Time: ${{ needs.build-and-push.outputs.time }}
+            
+      - name: Send failure email
+        if: needs.build-and-push.result == 'failure'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "❌ FilmCastPro Deployment Failed"
+          to: ${{ secrets.EMAIL_USERNAME }}
+          from: GitHub Actions <noreply@github.com>
+          body: |
+            ⚠️ Deployment failed!
+            
+            📦 Repository: ${{ github.repository }}
+            🔖 Commit: ${{ github.sha }}
+            👤 Author: ${{ github.actor }}
+            💬 Message: ${{ github.event.head_commit.message }}
+            
+            ❌ Status: FAILED
+            
+            🔍 Troubleshooting Steps:
+            1. Check the workflow logs below
+            2. Verify AWS credentials are valid
+            3. Check ECR repository permissions
+            4. Review Docker build logs
+            
+            📊 View Workflow Logs:
+            https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            💡 Common Issues:
+            - AWS credentials expired
+            - ECR permissions missing
+            - Docker build errors
+            - Network connectivity issues
 
