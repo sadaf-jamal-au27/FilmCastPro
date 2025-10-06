@@ -1,0 +1,41 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: filmcastpro
+  namespace: argocd
+  # Finalizer that ensures cascading deletes
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  
+  source:
+    repoURL: https://github.com/sadaf-jamal-au27/FilmCastPro
+    targetRevision: main
+    path: charts/filmcastpro
+    helm:
+      valueFiles:
+        - values.yaml
+  
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: filmcastpro
+  
+  syncPolicy:
+    automated:
+      prune: true       # Delete resources removed from Git
+      selfHeal: true    # Auto-sync if manual changes detected
+      allowEmpty: false # Prevent deleting all resources
+    
+    syncOptions:
+      - CreateNamespace=true  # Auto-create namespace if missing
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+    
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+

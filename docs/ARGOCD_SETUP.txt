@@ -1,0 +1,707 @@
+================================================================================
+                    ARGOCD SETUP & CONFIGURATION GUIDE
+================================================================================
+
+TABLE OF CONTENTS
+1. What is ArgoCD?
+2. Prerequisites
+3. Install ArgoCD on EKS
+4. Access ArgoCD UI
+5. Connect Git Repository
+6. Deploy FilmCastPro with ArgoCD
+7. ArgoCD Application Configuration
+8. CI/CD Pipeline Integration
+9. Multi-Environment Setup
+10. Best Practices
+11. Troubleshooting
+
+================================================================================
+1. WHAT IS ARGOCD?
+================================================================================
+
+ArgoCD is a declarative GitOps continuous delivery tool for Kubernetes.
+
+Key Features:
+- Automated deployment from Git repositories
+- Declarative configuration (YAML manifests/Helm charts)
+- Real-time sync status and health monitoring
+- Visual dashboard for application management
+- Automated or manual sync modes
+- Rollback capabilities
+- Multi-cluster support
+- SSO integration
+
+GitOps Workflow:
+1. Developer pushes code/config to Git
+2. ArgoCD detects changes automatically
+3. ArgoCD syncs Kubernetes cluster to match Git state
+4. Applications are updated automatically
+
+Benefits:
+✓ Single source of truth (Git)
+✓ Audit trail of all changes
+✓ Easy rollbacks (Git revert)
+✓ Disaster recovery (Git restore)
+✓ Team collaboration via Pull Requests
+✓ No manual kubectl/helm commands
+
+================================================================================
+2. PREREQUISITES
+================================================================================
+
+Required:
+- EKS cluster running (filmcastpro cluster)
+- kubectl configured and connected to cluster
+- Git repository with Helm charts (already done)
+- Admin access to Kubernetes cluster
+
+Verify Prerequisites:
+    kubectl cluster-info
+    kubectl get nodes
+    helm version
+
+Current Setup:
+- EKS Cluster: filmcastpro
+- Region: us-east-1
+- Git Repo: https://github.com/sadaf-jamal-au27/FilmCastPro
+- Helm Chart: charts/filmcastpro/
+
+================================================================================
+3. INSTALL ARGOCD ON EKS
+================================================================================
+
+3.1 Create ArgoCD Namespace
+----------------------------
+    kubectl create namespace argocd
+
+3.2 Install ArgoCD
+------------------
+    kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+    Wait for pods to be ready (~2-3 minutes):
+    kubectl get pods -n argocd -w
+
+    Expected pods:
+    - argocd-application-controller
+    - argocd-dex-server
+    - argocd-redis
+    - argocd-repo-server
+    - argocd-server
+    - argocd-applicationset-controller
+    - argocd-notifications-controller
+
+3.3 Verify Installation
+------------------------
+    kubectl get all -n argocd
+
+    All pods should be in Running state.
+
+================================================================================
+4. ACCESS ARGOCD UI
+================================================================================
+
+4.1 Method 1: LoadBalancer (Recommended for Production)
+--------------------------------------------------------
+Expose ArgoCD server via LoadBalancer:
+
+    kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "LoadBalancer"}}'
+
+Get LoadBalancer URL:
+    kubectl get svc argocd-server -n argocd
+
+    Wait 2-3 minutes for DNS propagation.
+    Access: http://[EXTERNAL-IP]
+
+4.2 Method 2: Port Forward (Quick Testing)
+-------------------------------------------
+    kubectl port-forward svc/argocd-server -n argocd 8080:443
+
+    Access: https://localhost:8080
+    (Accept self-signed certificate warning)
+
+4.3 Get Admin Password
+----------------------
+Initial admin password is auto-generated:
+
+    kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath="{.data.password}" | base64 -d && echo
+
+    Username: admin
+    Password: [output from above command]
+
+4.4 Login to ArgoCD
+-------------------
+1. Open ArgoCD URL in browser
+2. Username: admin
+3. Password: [from step 4.3]
+4. Click "Sign In"
+
+4.5 Change Admin Password (Recommended)
+----------------------------------------
+Via UI:
+    User Info → Update Password
+
+Via CLI:
+    # Install ArgoCD CLI first
+    brew install argocd
+
+    # Login
+    argocd login [ARGOCD-SERVER-URL]
+
+    # Update password
+    argocd account update-password
+
+================================================================================
+5. CONNECT GIT REPOSITORY
+================================================================================
+
+5.1 Add Repository via UI
+--------------------------
+1. Settings (gear icon) → Repositories → Connect Repo
+2. Choose connection method: HTTPS
+3. Repository URL: https://github.com/sadaf-jamal-au27/FilmCastPro
+4. For public repo: Leave username/password blank
+5. For private repo: 
+   - Username: your-github-username
+   - Password: GitHub Personal Access Token
+6. Click "Connect"
+7. Verify: Status should show "Successful"
+
+5.2 Add Repository via CLI
+---------------------------
+For public repository:
+    argocd repo add https://github.com/sadaf-jamal-au27/FilmCastPro
+
+For private repository:
+    argocd repo add https://github.com/sadaf-jamal-au27/FilmCastPro \
+      --username your-username \
+      --password ghp_xxxxxxxxxxxx
+
+5.3 Verify Repository
+----------------------
+Via UI: Settings → Repositories (should show green checkmark)
+
+Via CLI:
+    argocd repo list
+
+================================================================================
+6. DEPLOY FILMCASTPRO WITH ARGOCD
+================================================================================
+
+6.1 Create ArgoCD Application via UI
+-------------------------------------
+1. Click "+ New App"
+2. Fill in details:
+
+   GENERAL:
+   - Application Name: filmcastpro
+   - Project: default
+   - Sync Policy: Automatic
+     ☑ Auto-Create Namespace
+     ☑ Prune Resources
+     ☑ Self Heal
+
+   SOURCE:
+   - Repository URL: https://github.com/sadaf-jamal-au27/FilmCastPro
+   - Revision: main (or HEAD)
+   - Path: charts/filmcastpro
+
+   DESTINATION:
+   - Cluster URL: https://kubernetes.default.svc (in-cluster)
+   - Namespace: filmcastpro
+
+   HELM (if using Helm chart):
+   - Values Files: values.yaml
+
+3. Click "Create"
+
+6.2 Create ArgoCD Application via CLI
+--------------------------------------
+    argocd app create filmcastpro \
+      --repo https://github.com/sadaf-jamal-au27/FilmCastPro \
+      --path charts/filmcastpro \
+      --dest-server https://kubernetes.default.svc \
+      --dest-namespace filmcastpro \
+      --sync-policy automated \
+      --auto-prune \
+      --self-heal
+
+6.3 Create ArgoCD Application via YAML
+---------------------------------------
+Create file: argocd/filmcastpro-app.yaml
+
+    apiVersion: argoproj.io/v1alpha1
+    kind: Application
+    metadata:
+      name: filmcastpro
+      namespace: argocd
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/sadaf-jamal-au27/FilmCastPro
+        targetRevision: main
+        path: charts/filmcastpro
+        helm:
+          valueFiles:
+            - values.yaml
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: filmcastpro
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          allowEmpty: false
+        syncOptions:
+          - CreateNamespace=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
+
+Apply:
+    kubectl apply -f argocd/filmcastpro-app.yaml
+
+6.4 Verify Deployment
+---------------------
+Via UI:
+1. Navigate to Applications
+2. Click on "filmcastpro"
+3. Check sync status (should be "Synced")
+4. Check health status (should be "Healthy")
+5. View resource tree
+
+Via CLI:
+    argocd app get filmcastpro
+    argocd app sync filmcastpro --prune
+
+Via kubectl:
+    kubectl get application filmcastpro -n argocd
+    kubectl get pods -n filmcastpro
+
+================================================================================
+7. ARGOCD APPLICATION CONFIGURATION
+================================================================================
+
+7.1 Sync Policies
+-----------------
+Manual Sync:
+- Changes require manual approval
+- Good for production environments
+- Click "Sync" button to deploy
+
+Automated Sync:
+- Automatically syncs on Git changes
+- Default polling interval: 3 minutes
+- Can be configured
+
+7.2 Auto-Prune
+--------------
+When enabled:
+- Removes resources deleted from Git
+- Keeps cluster in sync with Git
+- Prevents resource drift
+
+Configuration:
+    syncPolicy:
+      automated:
+        prune: true
+
+7.3 Self-Heal
+-------------
+When enabled:
+- Automatically reverts manual changes
+- Maintains Git as source of truth
+- Fixes configuration drift
+
+Configuration:
+    syncPolicy:
+      automated:
+        selfHeal: true
+
+7.4 Sync Windows
+----------------
+Define when syncs are allowed:
+
+    syncPolicy:
+      syncOptions:
+        - CreateNamespace=true
+      syncWindows:
+        - kind: allow
+          schedule: '0 9 * * 1-5'  # Mon-Fri 9 AM
+          duration: 8h
+          applications:
+            - filmcastpro
+
+7.5 Health Assessment
+---------------------
+ArgoCD monitors:
+- Deployment rollout status
+- Pod health
+- Service endpoints
+- Custom health checks
+
+Custom health check example:
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: argocd-cm
+      namespace: argocd
+    data:
+      resource.customizations: |
+        networking.k8s.io/Ingress:
+          health.lua: |
+            hs = {}
+            hs.status = "Healthy"
+            return hs
+
+================================================================================
+8. CI/CD PIPELINE INTEGRATION
+================================================================================
+
+8.1 GitHub Actions + ArgoCD Workflow
+-------------------------------------
+File: .github/workflows/deploy.yml
+
+    name: Build and Deploy
+
+    on:
+      push:
+        branches: [main]
+
+    env:
+      AWS_REGION: us-east-1
+      ECR_REPOSITORY: filmcastpro
+
+    jobs:
+      build:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v3
+
+          - name: Configure AWS credentials
+            uses: aws-actions/configure-aws-credentials@v2
+            with:
+              aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+              aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+              aws-region: ${{ env.AWS_REGION }}
+
+          - name: Login to ECR
+            id: login-ecr
+            uses: aws-actions/amazon-ecr-login@v1
+
+          - name: Build and push image
+            env:
+              ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+              IMAGE_TAG: ${{ github.sha }}
+            run: |
+              docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+              docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+              docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+              docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+          - name: Update Helm values
+            env:
+              IMAGE_TAG: ${{ github.sha }}
+            run: |
+              sed -i "s|tag:.*|tag: \"$IMAGE_TAG\"|" charts/filmcastpro/values.yaml
+              git config user.name github-actions
+              git config user.email github-actions@github.com
+              git add charts/filmcastpro/values.yaml
+              git commit -m "Update image to $IMAGE_TAG"
+              git push
+
+    # ArgoCD automatically detects the change and deploys!
+
+8.2 Image Updater (Alternative)
+--------------------------------
+ArgoCD Image Updater automatically updates image tags:
+
+Install:
+    kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj-labs/argocd-image-updater/stable/manifests/install.yaml
+
+Configure application:
+    apiVersion: argoproj.io/v1alpha1
+    kind: Application
+    metadata:
+      name: filmcastpro
+      annotations:
+        argocd-image-updater.argoproj.io/image-list: filmcastpro=008099619893.dkr.ecr.us-east-1.amazonaws.com/filmcastpro
+        argocd-image-updater.argoproj.io/filmcastpro.update-strategy: latest
+        argocd-image-updater.argoproj.io/write-back-method: git
+
+8.3 Webhook Integration
+------------------------
+Instead of polling, use webhooks for instant updates:
+
+1. In ArgoCD: Settings → Webhooks → Add Webhook
+2. Copy webhook URL
+3. In GitHub: Settings → Webhooks → Add webhook
+   - Payload URL: [ArgoCD webhook URL]
+   - Content type: application/json
+   - Events: Just the push event
+4. Save
+
+Now Git pushes trigger immediate ArgoCD sync!
+
+================================================================================
+9. MULTI-ENVIRONMENT SETUP
+================================================================================
+
+9.1 Directory Structure
+------------------------
+    FilmCastPro/
+    ├── charts/filmcastpro/        # Base Helm chart
+    ├── environments/
+    │   ├── dev/
+    │   │   └── values.yaml        # Dev overrides
+    │   ├── staging/
+    │   │   └── values.yaml        # Staging overrides
+    │   └── production/
+    │       └── values.yaml        # Prod overrides
+    └── argocd/
+        ├── dev-app.yaml
+        ├── staging-app.yaml
+        └── prod-app.yaml
+
+9.2 Environment-Specific Values
+--------------------------------
+environments/dev/values.yaml:
+    replicaCount: 1
+    image:
+      tag: dev-latest
+    service:
+      type: ClusterIP
+    resources:
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
+environments/production/values.yaml:
+    replicaCount: 3
+    image:
+      tag: v1.0.0
+    service:
+      type: LoadBalancer
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+9.3 Create Environment Applications
+------------------------------------
+argocd/dev-app.yaml:
+    apiVersion: argoproj.io/v1alpha1
+    kind: Application
+    metadata:
+      name: filmcastpro-dev
+      namespace: argocd
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/sadaf-jamal-au27/FilmCastPro
+        targetRevision: develop
+        path: charts/filmcastpro
+        helm:
+          valueFiles:
+            - ../../environments/dev/values.yaml
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: filmcastpro-dev
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+
+argocd/prod-app.yaml:
+    apiVersion: argoproj.io/v1alpha1
+    kind: Application
+    metadata:
+      name: filmcastpro-prod
+      namespace: argocd
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/sadaf-jamal-au27/FilmCastPro
+        targetRevision: main
+        path: charts/filmcastpro
+        helm:
+          valueFiles:
+            - ../../environments/production/values.yaml
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: filmcastpro-prod
+      syncPolicy:
+        automated: {}  # Manual sync for production
+
+Deploy:
+    kubectl apply -f argocd/dev-app.yaml
+    kubectl apply -f argocd/prod-app.yaml
+
+9.4 Promotion Workflow
+----------------------
+1. Develop → Push to 'develop' branch → Auto-deploy to dev
+2. Test in dev environment
+3. Merge develop → main via Pull Request
+4. Tag release: git tag v1.0.0
+5. Manually sync production app in ArgoCD UI
+6. Production updated with tested code
+
+================================================================================
+10. BEST PRACTICES
+================================================================================
+
+10.1 Application Structure
+---------------------------
+✓ One Git repo per application or monorepo with clear paths
+✓ Separate Helm chart from application code
+✓ Use values files for environment-specific configs
+✓ Keep secrets in Sealed Secrets or External Secrets
+
+10.2 Sync Policies
+------------------
+✓ Development: Automated sync with self-heal
+✓ Staging: Automated sync without self-heal
+✓ Production: Manual sync with approval
+✓ Use sync windows for production changes
+
+10.3 Resource Management
+-------------------------
+✓ Set resource limits in Helm values
+✓ Use namespace per environment
+✓ Enable resource quotas
+✓ Implement pod disruption budgets
+
+10.4 Security
+-------------
+✓ Use RBAC for team access control
+✓ Store secrets in git-encrypted format (SOPS, Sealed Secrets)
+✓ Enable SSO (Google, GitHub, etc.)
+✓ Audit ArgoCD logs regularly
+✓ Use private Git repositories
+
+10.5 Monitoring
+---------------
+✓ Enable Prometheus metrics
+✓ Set up alerts for sync failures
+✓ Monitor application health
+✓ Track deployment frequency
+
+================================================================================
+11. TROUBLESHOOTING
+================================================================================
+
+11.1 Application Not Syncing
+-----------------------------
+Check sync status:
+    argocd app get filmcastpro
+
+Force sync:
+    argocd app sync filmcastpro --force
+
+Check events:
+    kubectl get events -n argocd --sort-by='.lastTimestamp'
+
+11.2 Repository Connection Failed
+----------------------------------
+Check repository:
+    argocd repo list
+
+Test connection:
+    argocd repo get https://github.com/sadaf-jamal-au27/FilmCastPro
+
+For private repos, verify credentials:
+    argocd repo add https://github.com/sadaf-jamal-au27/FilmCastPro \
+      --username your-username \
+      --password [NEW-TOKEN]
+
+11.3 Out of Sync Status
+-----------------------
+View diff:
+    argocd app diff filmcastpro
+
+Reasons:
+- Manual changes in cluster
+- Git changes not yet synced
+- Helm values mismatch
+
+Fix:
+    argocd app sync filmcastpro --prune
+
+11.4 Health Check Failing
+--------------------------
+Describe application:
+    kubectl describe application filmcastpro -n argocd
+
+Check pod logs:
+    kubectl logs -n filmcastpro -l app.kubernetes.io/name=filmcastpro
+
+Check events:
+    kubectl get events -n filmcastpro --sort-by='.lastTimestamp'
+
+11.5 ArgoCD Server Not Accessible
+----------------------------------
+Check pods:
+    kubectl get pods -n argocd
+
+Check service:
+    kubectl get svc argocd-server -n argocd
+
+Restart server:
+    kubectl rollout restart deployment argocd-server -n argocd
+
+11.6 Image Pull Errors
+----------------------
+Verify ECR access:
+    aws ecr describe-repositories --region us-east-1
+
+Check node IAM role has ECR permissions:
+    aws iam list-attached-role-policies --role-name [NODE-ROLE-NAME]
+
+================================================================================
+USEFUL COMMANDS REFERENCE
+================================================================================
+
+ArgoCD CLI:
+    argocd app list                              # List all applications
+    argocd app get filmcastpro                   # Get app details
+    argocd app sync filmcastpro                  # Sync application
+    argocd app delete filmcastpro                # Delete application
+    argocd app logs filmcastpro                  # View app logs
+    argocd app rollback filmcastpro              # Rollback to previous version
+    argocd app set filmcastpro --revision main   # Change target revision
+
+Kubectl:
+    kubectl get applications -n argocd           # List ArgoCD apps
+    kubectl describe application filmcastpro -n argocd
+    kubectl get pods -n argocd                   # ArgoCD pods
+    kubectl logs -n argocd deploy/argocd-server  # ArgoCD server logs
+
+Monitoring:
+    kubectl top pods -n argocd
+    kubectl get events -n argocd --watch
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+1. Install ArgoCD on your EKS cluster
+2. Access ArgoCD UI and change admin password
+3. Connect your GitHub repository
+4. Create FilmCastPro application in ArgoCD
+5. Set up automated sync policy
+6. Configure GitHub Actions for CI/CD
+7. Set up multi-environment deployments
+8. Implement monitoring and alerts
+
+================================================================================
+DOCUMENT VERSION
+================================================================================
+
+Version: 1.0
+Last Updated: October 6, 2025
+Author: DevOps Team
+
+================================================================================
+
