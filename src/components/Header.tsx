@@ -27,6 +27,9 @@ export const Header: React.FC<HeaderProps> = ({ currentPage, onPageChange }) => 
           >
             <Film className="h-8 w-8 text-yellow-400" />
             <span className="text-xl font-bold text-white">FilmCast Pro</span>
+            <span className="ml-2 text-xs bg-green-500 text-white px-2 py-1 rounded-full font-semibold">
+              v2.0 GitOps
+            </span>
           </div>
 
           {/* Desktop Navigation */}
