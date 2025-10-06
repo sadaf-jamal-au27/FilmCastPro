@@ -59,6 +59,16 @@ export const HomePage: React.FC<HomePageProps> = ({ onPageChange }) => {
             Connect with industry professionals, showcase your portfolio, and discover opportunities 
             in the world of filmmaking.
           </p>
+          {/* Deployment Info Badge */}
+          <div className="mb-6 inline-block">
+            <div className="bg-gray-800/80 backdrop-blur-sm border border-green-500/30 rounded-full px-6 py-2 text-sm">
+              <span className="text-green-400 font-semibold">🟢 Live</span>
+              <span className="text-gray-400 mx-2">|</span>
+              <span className="text-blue-400">Powered by AWS EKS</span>
+              <span className="text-gray-400 mx-2">|</span>
+              <span className="text-purple-400">GitOps Automated</span>
+            </div>
+          </div>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button 
               onClick={() => onPageChange('register')}
